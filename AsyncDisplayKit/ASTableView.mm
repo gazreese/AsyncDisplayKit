@@ -11,6 +11,7 @@
 #import "ASTableViewInternal.h"
 
 #import "ASAssert.h"
+#import "ASAvailability.h"
 #import "ASBatchFetching.h"
 #import "ASCellNode+Internal.h"
 #import "ASChangeSetDataController.h"
@@ -18,15 +19,10 @@
 #import "ASDisplayNodeExtras.h"
 #import "ASDisplayNode+Beta.h"
 #import "ASDisplayNode+FrameworkPrivate.h"
-#import "ASEnvironmentInternal.h"
 #import "ASInternalHelpers.h"
 #import "ASLayout.h"
-#import "ASLayoutController.h"
-#import "ASRangeController.h"
-#import "ASRangeControllerUpdateRangeProtocol+Beta.h"
 #import "_ASDisplayLayer.h"
-
-#import <CoreFoundation/CoreFoundation.h>
+#import "ASTableNode.h"
 
 static const ASSizeRange kInvalidSizeRange = {CGSizeZero, CGSizeZero};
 static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
@@ -67,20 +63,27 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
 - (void)setNode:(ASCellNode *)node
 {
   _node = node;
-  node.selected = self.selected;
-  node.highlighted = self.highlighted;
+  [node __setSelectedFromUIKit:self.selected];
+  [node __setHighlightedFromUIKit:self.highlighted];
 }
 
 - (void)setSelected:(BOOL)selected animated:(BOOL)animated
 {
   [super setSelected:selected animated:animated];
-  _node.selected = selected;
+  [_node __setSelectedFromUIKit:selected];
 }
 
 - (void)setHighlighted:(BOOL)highlighted animated:(BOOL)animated
 {
   [super setHighlighted:highlighted animated:animated];
-  _node.highlighted = highlighted;
+  [_node __setHighlightedFromUIKit:highlighted];
+}
+
+- (void)prepareForReuse
+{
+  // Need to clear node pointer before UIKit calls setSelected:NO / setHighlighted:NO on its cells
+  self.node = nil;
+  [super prepareForReuse];
 }
 
 @end
@@ -92,7 +95,7 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
 - (instancetype)_initWithTableView:(ASTableView *)tableView;
 @end
 
-@interface ASTableView () <ASRangeControllerDataSource, ASRangeControllerDelegate, ASDataControllerSource, _ASTableViewCellDelegate, ASCellNodeLayoutDelegate, ASDelegateProxyInterceptor, ASBatchFetchingScrollView, ASDataControllerEnvironmentDelegate>
+@interface ASTableView () <ASRangeControllerDataSource, ASRangeControllerDelegate, ASDataControllerSource, _ASTableViewCellDelegate, ASCellNodeInteractionDelegate, ASDelegateProxyInterceptor, ASBatchFetchingScrollView, ASDataControllerEnvironmentDelegate>
 {
   ASTableViewProxy *_proxyDataSource;
   ASTableViewProxy *_proxyDelegate;
@@ -109,6 +112,15 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
   CGFloat _contentOffsetAdjustment;
   
   CGPoint _deceleratingVelocity;
+  
+  /**
+   * Our layer, retained. Under iOS < 9, when table views are removed from the hierarchy,
+   * their layers may be deallocated and become dangling pointers. This puts the table view
+   * into a very dangerous state where pretty much any call will crash it. So we manually retain our layer.
+   *
+   * You should never access this, and it will be nil under iOS >= 9.
+   */
+  CALayer *_retainedLayer;
 
   CGFloat _nodesConstrainedWidth;
   BOOL _ignoreNodesConstrainedWidthChange;
@@ -231,6 +243,10 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
     // logic to ASTableNode (required to have a shared superclass with ASCollection*).
     ASTableNode *tableNode = nil; //[[ASTableNode alloc] _initWithTableView:self];
     self.strongTableNode = tableNode;
+  }
+  
+  if (!AS_AT_LEAST_IOS9) {
+    _retainedLayer = self.layer;
   }
   
   return self;
@@ -362,22 +378,22 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
 
 - (void)setTuningParameters:(ASRangeTuningParameters)tuningParameters forRangeType:(ASLayoutRangeType)rangeType
 {
-  [_layoutController setTuningParameters:tuningParameters forRangeMode:ASLayoutRangeModeFull rangeType:rangeType];
+  [_rangeController setTuningParameters:tuningParameters forRangeMode:ASLayoutRangeModeFull rangeType:rangeType];
 }
 
 - (ASRangeTuningParameters)tuningParametersForRangeType:(ASLayoutRangeType)rangeType
 {
-  return [_layoutController tuningParametersForRangeMode:ASLayoutRangeModeFull rangeType:rangeType];
+  return [_rangeController tuningParametersForRangeMode:ASLayoutRangeModeFull rangeType:rangeType];
 }
 
 - (void)setTuningParameters:(ASRangeTuningParameters)tuningParameters forRangeMode:(ASLayoutRangeMode)rangeMode rangeType:(ASLayoutRangeType)rangeType
 {
-  [_layoutController setTuningParameters:tuningParameters forRangeMode:rangeMode rangeType:rangeType];
+  [_rangeController setTuningParameters:tuningParameters forRangeMode:rangeMode rangeType:rangeType];
 }
 
 - (ASRangeTuningParameters)tuningParametersForRangeMode:(ASLayoutRangeMode)rangeMode rangeType:(ASLayoutRangeType)rangeType
 {
-  return [_layoutController tuningParametersForRangeMode:rangeMode rangeType:rangeType];
+  return [_rangeController tuningParametersForRangeMode:rangeMode rangeType:rangeType];
 }
 
 - (NSArray<NSArray <ASCellNode *> *> *)completedNodes
@@ -1069,8 +1085,8 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
     return ^{
       __typeof__(self) strongSelf = weakSelf;
       [node enterHierarchyState:ASHierarchyStateRangeManaged];
-      if (node.layoutDelegate == nil) {
-        node.layoutDelegate = strongSelf;
+      if (node.interactionDelegate == nil) {
+        node.interactionDelegate = strongSelf;
       }
       return node;
     };
@@ -1082,8 +1098,8 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
     __typeof__(self) strongSelf = weakSelf;
     ASCellNode *node = block();
     [node enterHierarchyState:ASHierarchyStateRangeManaged];
-    if (node.layoutDelegate == nil) {
-      node.layoutDelegate = strongSelf;
+    if (node.interactionDelegate == nil) {
+      node.interactionDelegate = strongSelf;
     }
     return node;
   };
@@ -1158,7 +1174,27 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
   }
 }
 
-#pragma mark - ASCellNodeLayoutDelegate
+#pragma mark - ASCellNodeDelegate
+
+- (void)nodeSelectedStateDidChange:(ASCellNode *)node
+{
+  NSIndexPath *indexPath = [self indexPathForNode:node];
+  if (indexPath) {
+    if (node.isSelected) {
+      [self selectRowAtIndexPath:indexPath animated:NO scrollPosition:UITableViewScrollPositionNone];
+    } else {
+      [self deselectRowAtIndexPath:indexPath animated:NO];
+    }
+  }
+}
+
+- (void)nodeHighlightedStateDidChange:(ASCellNode *)node
+{
+  NSIndexPath *indexPath = [self indexPathForNode:node];
+  if (indexPath) {
+    [self cellForRowAtIndexPath:indexPath].highlighted = node.isHighlighted;
+  }
+}
 
 - (void)nodeDidRelayout:(ASCellNode *)node sizeChanged:(BOOL)sizeChanged
 {
