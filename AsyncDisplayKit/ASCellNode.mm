@@ -129,7 +129,7 @@
   
   //Adding this lock because lock used to be held when this method was called. Not sure if it's necessary for
   //didRelayoutFromOldSize:toNewSize:
-  ASDN::MutexLocker l(_propertyLock);
+  ASDN::MutexLocker l(__instanceLock__);
   [self didRelayoutFromOldSize:oldSize toNewSize:self.calculatedSize];
 }
 
@@ -215,16 +215,6 @@
   }
 }
 
-- (BOOL)selected
-{
-  return self.isSelected;
-}
-
-- (BOOL)highlighted
-{
-  return self.isSelected;
-}
-
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wobjc-missing-super-calls"
 
@@ -271,6 +261,10 @@
 - (void)visibleStateDidChange:(BOOL)isVisible
 {
   [super visibleStateDidChange:isVisible];
+  
+  if (isVisible && self.neverShowPlaceholders) {
+    [self recursivelyEnsureDisplaySynchronously:YES];
+  }
   
   // NOTE: This assertion is failing in some apps and will be enabled soon.
   // ASDisplayNodeAssert(self.isNodeLoaded, @"Node should be loaded in order for it to become visible or invisible.  If not in this situation, we shouldn't trigger creating the view.");
