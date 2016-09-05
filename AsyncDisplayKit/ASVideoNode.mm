@@ -106,12 +106,6 @@ static NSString * const kRate = @"rate";
   return self;
 }
 
-- (instancetype)initWithViewBlock:(ASDisplayNodeViewBlock)viewBlock didLoadBlock:(ASDisplayNodeDidLoadBlock)didLoadBlock
-{
-  ASDisplayNodeAssertNotSupported();
-  return nil;
-}
-
 - (ASDisplayNode *)constructPlayerNode
 {
   ASVideoNode * __weak weakSelf = self;
@@ -442,22 +436,28 @@ static NSString * const kRate = @"rate";
   }
 }
 
-- (void)visibleStateDidChange:(BOOL)isVisible
+- (void)didEnterVisibleState
 {
-  [super visibleStateDidChange:isVisible];
+  [super didEnterVisibleState];
   
   ASDN::MutexLocker l(__instanceLock__);
   
-  if (isVisible) {
-    if (_shouldBePlaying || _shouldAutoplay) {
-      [self play];
-    }
-  } else if (_shouldBePlaying) {
+  if (_shouldBePlaying || _shouldAutoplay) {
+    [self play];
+  }
+}
+
+- (void)didExitVisibleState
+{
+  [super didExitVisibleState];
+  
+  ASDN::MutexLocker l(__instanceLock__);
+  
+  if (_shouldBePlaying) {
     [self pause];
     _shouldBePlaying = YES;
   }
 }
-
 
 #pragma mark - Video Properties
 
@@ -555,6 +555,12 @@ static NSString * const kRate = @"rate";
 {
   ASDN::MutexLocker l(__instanceLock__);
   return _player;
+}
+
+- (AVPlayerLayer *)playerLayer
+{
+  ASDN::MutexLocker l(__instanceLock__);
+  return (AVPlayerLayer *)_playerNode.layer;
 }
 
 - (id<ASVideoNodeDelegate>)delegate{
@@ -678,6 +684,18 @@ static NSString * const kRate = @"rate";
     }
   }
   return YES;
+}
+
+- (void)reset {
+  ASDN::MutexLocker l(__instanceLock__);
+  
+  if (_playerNode != nil) {
+    [_playerNode removeFromSupernode];
+    _playerNode = nil;
+  }
+  
+  [_player seekToTime:kCMTimeZero];
+  [self pause];
 }
 
 

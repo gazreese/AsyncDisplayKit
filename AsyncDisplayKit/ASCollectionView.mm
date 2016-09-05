@@ -18,7 +18,6 @@
 #import "ASCollectionViewFlowLayoutInspector.h"
 #import "ASDisplayNodeExtras.h"
 #import "ASDisplayNode+FrameworkPrivate.h"
-#import "ASDisplayNode+Beta.h"
 #import "ASInternalHelpers.h"
 #import "UICollectionViewLayout+ASConvenience.h"
 #import "ASRangeController.h"
@@ -87,7 +86,7 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
 #pragma mark -
 #pragma mark ASCollectionView.
 
-@interface ASCollectionView () <ASRangeControllerDataSource, ASRangeControllerDelegate, ASDataControllerSource, ASCellNodeInteractionDelegate, ASDelegateProxyInterceptor, ASBatchFetchingScrollView, ASDataControllerEnvironmentDelegate> {
+@interface ASCollectionView () <ASRangeControllerDataSource, ASRangeControllerDelegate, ASCollectionDataControllerSource, ASCellNodeInteractionDelegate, ASDelegateProxyInterceptor, ASBatchFetchingScrollView, ASDataControllerEnvironmentDelegate, ASCALayerExtendedDelegate> {
   ASCollectionViewProxy *_proxyDataSource;
   ASCollectionViewProxy *_proxyDelegate;
   
@@ -107,8 +106,8 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
   
   ASBatchContext *_batchContext;
   
-  CGSize _maxSizeForNodesConstrainedSize;
-  BOOL _ignoreMaxSizeChange;
+  CGSize _lastBoundsSizeUsedForMeasuringNodes;
+  BOOL _ignoreNextBoundsSizeChangeForMeasuringNodes;
   
   NSMutableSet *_registeredSupplementaryKinds;
   
@@ -151,11 +150,9 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
   } _asyncDelegateFlags;
   
   struct {
-    unsigned int asyncDataSourceConstrainedSizeForNode:1;
     unsigned int asyncDataSourceNodeForItemAtIndexPath:1;
     unsigned int asyncDataSourceNodeBlockForItemAtIndexPath:1;
     unsigned int asyncDataSourceNumberOfSectionsInCollectionView:1;
-    unsigned int asyncDataSourceCollectionViewConstrainedSizeForNodeAtIndexPath:1;
   } _asyncDataSourceFlags;
   
   struct {
@@ -232,9 +229,8 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
   _rangeController.delegate = self;
   _rangeController.layoutController = _layoutController;
   
-  _dataController = [[ASCollectionDataController alloc] init];
+  _dataController = [[ASCollectionDataController alloc] initWithDataSource:self];
   _dataController.delegate = _rangeController;
-  _dataController.dataSource = self;
   _dataController.environmentDelegate = self;
   
   _batchContext = [[ASBatchContext alloc] init];
@@ -246,10 +242,10 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
   
   _superIsPendingDataLoad = YES;
   
-  _maxSizeForNodesConstrainedSize = self.bounds.size;
+  _lastBoundsSizeUsedForMeasuringNodes = self.bounds.size;
   // If the initial size is 0, expect a size change very soon which is part of the initial configuration
   // and should not trigger a relayout.
-  _ignoreMaxSizeChange = CGSizeEqualToSize(_maxSizeForNodesConstrainedSize, CGSizeZero);
+  _ignoreNextBoundsSizeChangeForMeasuringNodes = CGSizeEqualToSize(_lastBoundsSizeUsedForMeasuringNodes, CGSizeZero);
   
   _layoutFacilitator = layoutFacilitator;
   
@@ -355,11 +351,9 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
     _asyncDataSource = asyncDataSource;
     _proxyDataSource = [[ASCollectionViewProxy alloc] initWithTarget:_asyncDataSource interceptor:self];
     
-    _asyncDataSourceFlags.asyncDataSourceConstrainedSizeForNode = [_asyncDataSource respondsToSelector:@selector(collectionView:constrainedSizeForNodeAtIndexPath:)];
     _asyncDataSourceFlags.asyncDataSourceNodeForItemAtIndexPath = [_asyncDataSource respondsToSelector:@selector(collectionView:nodeForItemAtIndexPath:)];
     _asyncDataSourceFlags.asyncDataSourceNodeBlockForItemAtIndexPath = [_asyncDataSource respondsToSelector:@selector(collectionView:nodeBlockForItemAtIndexPath:)];
     _asyncDataSourceFlags.asyncDataSourceNumberOfSectionsInCollectionView = [_asyncDataSource respondsToSelector:@selector(numberOfSectionsInCollectionView:)];
-    _asyncDataSourceFlags.asyncDataSourceCollectionViewConstrainedSizeForNodeAtIndexPath = [_asyncDataSource respondsToSelector:@selector(collectionView:constrainedSizeForNodeAtIndexPath:)];
 
     // Data-source must implement collectionView:nodeForItemAtIndexPath: or collectionView:nodeBlockForItemAtIndexPath:
     ASDisplayNodeAssertTrue(_asyncDataSourceFlags.asyncDataSourceNodeBlockForItemAtIndexPath || _asyncDataSourceFlags.asyncDataSourceNodeForItemAtIndexPath);
@@ -504,6 +498,22 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
   }
   
   return visibleNodes;
+}
+
+- (void)scrollToItemAtIndexPath:(NSIndexPath *)indexPath atScrollPosition:(UICollectionViewScrollPosition)scrollPosition animated:(BOOL)animated
+{
+  ASDisplayNodeAssertMainThread();
+
+  [self waitUntilAllUpdatesAreCommitted];
+  [super scrollToItemAtIndexPath:indexPath atScrollPosition:scrollPosition animated:animated];
+}
+
+- (void)selectItemAtIndexPath:(NSIndexPath *)indexPath animated:(BOOL)animated scrollPosition:(UICollectionViewScrollPosition)scrollPosition
+{
+  ASDisplayNodeAssertMainThread();
+
+  [self waitUntilAllUpdatesAreCommitted];
+  [super selectItemAtIndexPath:indexPath animated:animated scrollPosition:scrollPosition];
 }
 
 #pragma mark Internal
@@ -833,26 +843,6 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
     self.contentInset = UIEdgeInsetsZero;
   }
   
-  if (! CGSizeEqualToSize(_maxSizeForNodesConstrainedSize, self.bounds.size)) {
-    _maxSizeForNodesConstrainedSize = self.bounds.size;
-    
-    // First size change occurs during initial configuration. An expensive relayout pass is unnecessary at that time
-    // and should be avoided, assuming that the initial data loading automatically runs shortly afterward.
-    if (_ignoreMaxSizeChange) {
-      _ignoreMaxSizeChange = NO;
-    } else {
-      // This actually doesn't perform an animation, but prevents the transaction block from being processed in the
-      // data controller's prevent animation block that would interrupt an interrupted relayout happening in an animation block
-      // ie. ASCollectionView bounds change on rotation or multi-tasking split view resize.
-      [self performBatchAnimated:YES updates:^{
-        [_dataController relayoutAllNodes];
-      } completion:nil];
-      // We need to ensure the size requery is done before we update our layout.
-      [self waitUntilAllUpdatesAreCommitted];
-      [self.collectionViewLayout invalidateLayout];
-    }
-  }
-  
   // Flush any pending invalidation action if needed.
   ASCollectionViewInvalidationStyle invalidationStyle = _nextLayoutInvalidationStyle;
   _nextLayoutInvalidationStyle = ASCollectionViewInvalidationStyleNone;
@@ -1023,11 +1013,6 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
   return [self.layoutInspector collectionView:self supplementaryNodesOfKind:kind inSection:section];
 }
 
-- (NSUInteger)dataController:(ASCollectionDataController *)dataController numberOfSectionsForSupplementaryNodeOfKind:(NSString *)kind;
-{
-  return [self.layoutInspector collectionView:self numberOfSectionsForSupplementaryNodeOfKind:kind];
-}
-
 #pragma mark - ASRangeControllerDataSource
 
 - (ASRangeController *)rangeController
@@ -1063,6 +1048,11 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
 - (ASDisplayNode *)rangeController:(ASRangeController *)rangeController nodeAtIndexPath:(NSIndexPath *)indexPath
 {
   return [_dataController nodeAtIndexPath:indexPath];
+}
+
+- (NSString *)nameForRangeControllerDataSource
+{
+  return self.asyncDataSource ? NSStringFromClass([self.asyncDataSource class]) : NSStringFromClass([self class]);
 }
 
 #pragma mark - ASRangeControllerDelegate
@@ -1296,6 +1286,40 @@ static NSString * const kCellReuseIdentifier = @"_ASCollectionViewCell";
   if (![node supportsRangeManagedInterfaceState]) {
     [_rangeController setNeedsUpdate];
     [_rangeController updateIfNeeded];
+  }
+}
+
+#pragma mark ASCALayerExtendedDelegate
+
+/**
+ * UICollectionView inadvertently triggers a -prepareLayout call to its layout object
+ * between [super setFrame:] and [self layoutSubviews] during size changes. So we need
+ * to get in there and re-measure our nodes before that -prepareLayout call.
+ * We can't wait until -layoutSubviews or the end of -setFrame:.
+ *
+ * @see @p testThatNodeCalculatedSizesAreUpdatedBeforeFirstPrepareLayoutAfterRotation
+ */
+- (void)layer:(CALayer *)layer didChangeBoundsWithOldValue:(CGRect)oldBounds newValue:(CGRect)newBounds
+{
+  if (CGSizeEqualToSize(_lastBoundsSizeUsedForMeasuringNodes, newBounds.size)) {
+    return;
+  }
+  _lastBoundsSizeUsedForMeasuringNodes = newBounds.size;
+
+  // First size change occurs during initial configuration. An expensive relayout pass is unnecessary at that time
+  // and should be avoided, assuming that the initial data loading automatically runs shortly afterward.
+  if (_ignoreNextBoundsSizeChangeForMeasuringNodes) {
+    _ignoreNextBoundsSizeChangeForMeasuringNodes = NO;
+  } else {
+    // This actually doesn't perform an animation, but prevents the transaction block from being processed in the
+    // data controller's prevent animation block that would interrupt an interrupted relayout happening in an animation block
+    // ie. ASCollectionView bounds change on rotation or multi-tasking split view resize.
+    [self performBatchAnimated:YES updates:^{
+      [_dataController relayoutAllNodes];
+    } completion:nil];
+    // We need to ensure the size requery is done before we update our layout.
+    [self waitUntilAllUpdatesAreCommitted];
+    [self.collectionViewLayout invalidateLayout];
   }
 }
 

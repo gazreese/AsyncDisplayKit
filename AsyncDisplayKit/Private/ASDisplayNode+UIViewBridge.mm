@@ -54,7 +54,7 @@ ASDISPLAYNODE_INLINE BOOL ASDisplayNodeShouldApplyBridgedWriteToView(ASDisplayNo
   if (ASDisplayNodeThreadIsMain()) {
     return loaded;
   } else {
-    if (loaded && !node->_pendingViewState.hasChanges) {
+    if (loaded && !ASDisplayNodeGetPendingState(node).hasChanges) {
       [[ASPendingStateController sharedInstance] registerNode:node];
     }
     return NO;
@@ -344,7 +344,7 @@ if (shouldApply) { _layer.layerProperty = (layerValueExpr); } else { ASDisplayNo
     // The node is loaded but we're not on main.
     // We will call [self __setNeedsLayout] when we apply
     // the pending state. We need to call it on main if the node is loaded
-    // to support implicit hierarchy management.
+    // to support automatic subnode management.
     [ASDisplayNodeGetPendingState(self) setNeedsLayout];
   } else {
     // The node is not loaded and we're not on main.

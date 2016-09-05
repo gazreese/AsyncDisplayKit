@@ -17,7 +17,6 @@
 #import "ASChangeSetDataController.h"
 #import "ASDelegateProxy.h"
 #import "ASDisplayNodeExtras.h"
-#import "ASDisplayNode+Beta.h"
 #import "ASDisplayNode+FrameworkPrivate.h"
 #import "ASInternalHelpers.h"
 #import "ASLayout.h"
@@ -189,8 +188,7 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
   _rangeController.dataSource = self;
   _rangeController.delegate = self;
   
-  _dataController = [[dataControllerClass alloc] init];
-  _dataController.dataSource = self;
+  _dataController = [[dataControllerClass alloc] initWithDataSource:self];
   _dataController.delegate = _rangeController;
   _dataController.environmentDelegate = self;
   
@@ -450,6 +448,30 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
 {
   ASDisplayNodeAssertMainThread();
   [_dataController waitUntilAllUpdatesAreCommitted];
+}
+
+- (void)scrollToRowAtIndexPath:(NSIndexPath *)indexPath atScrollPosition:(UITableViewScrollPosition)scrollPosition animated:(BOOL)animated
+{
+  ASDisplayNodeAssertMainThread();
+
+  [self waitUntilAllUpdatesAreCommitted];
+  [super scrollToRowAtIndexPath:indexPath atScrollPosition:scrollPosition animated:animated];
+}
+
+- (void)scrollToNearestSelectedRowAtScrollPosition:(UITableViewScrollPosition)scrollPosition animated:(BOOL)animated
+{
+  ASDisplayNodeAssertMainThread();
+  
+  [self waitUntilAllUpdatesAreCommitted];
+  [super scrollToNearestSelectedRowAtScrollPosition:scrollPosition animated:animated];
+}
+
+- (void)selectRowAtIndexPath:(NSIndexPath *)indexPath animated:(BOOL)animated scrollPosition:(UITableViewScrollPosition)scrollPosition
+{
+  ASDisplayNodeAssertMainThread();
+  
+  [self waitUntilAllUpdatesAreCommitted];
+  [super selectRowAtIndexPath:indexPath animated:animated scrollPosition:scrollPosition];
 }
 
 - (void)layoutSubviews
@@ -914,6 +936,11 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
   return ASInterfaceStateForDisplayNode(self.tableNode, self.window);
 }
 
+- (NSString *)nameForRangeControllerDataSource
+{
+  return self.asyncDataSource ? NSStringFromClass([self.asyncDataSource class]) : NSStringFromClass([self class]);
+}
+
 #pragma mark - ASRangeControllerDelegate
 
 - (void)didBeginUpdatesInRangeController:(ASRangeController *)rangeController
@@ -1136,8 +1163,12 @@ static NSString * const kCellReuseIdentifier = @"_ASTableViewCell";
 
 - (void)didLayoutSubviewsOfTableViewCell:(_ASTableViewCell *)tableViewCell
 {
-  CGFloat contentViewWidth = tableViewCell.contentView.bounds.size.width;
   ASCellNode *node = tableViewCell.node;
+  if (node == nil) {
+    return;
+  }
+  
+  CGFloat contentViewWidth = tableViewCell.contentView.bounds.size.width;
   ASSizeRange constrainedSize = node.constrainedSizeForCalculatedLayout;
   
   // Table view cells should always fill its content view width.

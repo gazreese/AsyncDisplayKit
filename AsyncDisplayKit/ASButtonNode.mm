@@ -14,7 +14,6 @@
 #import "ASDisplayNode+Subclasses.h"
 #import "ASBackgroundLayoutSpec.h"
 #import "ASInsetLayoutSpec.h"
-#import "ASDisplayNode+Beta.h"
 #import "ASStaticLayoutSpec.h"
 
 @interface ASButtonNode ()
@@ -56,7 +55,7 @@
 - (instancetype)init
 {
   if (self = [super init]) {
-    self.usesImplicitHierarchyManagement = YES;
+    self.automaticallyManagesSubnodes = YES;
     
     _contentSpacing = 8.0;
     _laysOutHorizontally = YES;
@@ -184,8 +183,8 @@
     newTitle = _normalAttributedTitle;
   }
 
-  if ((_titleNode != nil || newTitle.length > 0) && [self.titleNode.attributedString isEqualToAttributedString:newTitle] == NO) {
-    _titleNode.attributedString = newTitle;
+  if ((_titleNode != nil || newTitle.length > 0) && [self.titleNode.attributedText isEqualToAttributedString:newTitle] == NO) {
+    _titleNode.attributedText = newTitle;
     self.accessibilityLabel = _titleNode.accessibilityLabel;
     [self setNeedsLayout];
   }
@@ -480,7 +479,7 @@
     [children addObject:_imageNode];
   }
   
-  if (_titleNode.attributedString.length > 0) {
+  if (_titleNode.attributedText.length > 0) {
     [children addObject:_titleNode];
   }
   
@@ -509,7 +508,7 @@
   [super layout];
   _backgroundImageNode.hidden = (_backgroundImageNode.image == nil);
   _imageNode.hidden = (_imageNode.image == nil);
-  _titleNode.hidden = (_titleNode.attributedString.length == 0);
+  _titleNode.hidden = (_titleNode.attributedText.length == 0);
 }
 
 @end

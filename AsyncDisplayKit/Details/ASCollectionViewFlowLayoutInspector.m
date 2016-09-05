@@ -34,7 +34,7 @@ static inline ASSizeRange NodeConstrainedSizeForScrollDirection(ASCollectionView
 @implementation ASCollectionViewLayoutInspector {
   struct {
     unsigned int implementsConstrainedSizeForNodeAtIndexPath:1;
-  } _dataSourceFlags;
+  } _delegateFlags;
 }
 
 #pragma mark Lifecycle
@@ -43,26 +43,29 @@ static inline ASSizeRange NodeConstrainedSizeForScrollDirection(ASCollectionView
 {
   self = [super init];
   if (self != nil) {
-    [self didChangeCollectionViewDataSource:collectionView.asyncDataSource];
+    [self didChangeCollectionViewDelegate:collectionView.asyncDelegate];
   }
   return self;
 }
 
 #pragma mark ASCollectionViewLayoutInspecting
 
-- (void)didChangeCollectionViewDataSource:(id<ASCollectionDataSource>)dataSource
+- (void)didChangeCollectionViewDelegate:(id<ASCollectionDelegate>)delegate
 {
-  if (dataSource == nil) {
-    memset(&_dataSourceFlags, 0, sizeof(_dataSourceFlags));
+  if (delegate == nil) {
+    memset(&_delegateFlags, 0, sizeof(_delegateFlags));
   } else {
-    _dataSourceFlags.implementsConstrainedSizeForNodeAtIndexPath = [dataSource respondsToSelector:@selector(collectionView:constrainedSizeForNodeAtIndexPath:)];
+    _delegateFlags.implementsConstrainedSizeForNodeAtIndexPath = [delegate respondsToSelector:@selector(collectionView:constrainedSizeForNodeAtIndexPath:)];
   }
 }
 
 - (ASSizeRange)collectionView:(ASCollectionView *)collectionView constrainedSizeForNodeAtIndexPath:(NSIndexPath *)indexPath
 {
-  if (_dataSourceFlags.implementsConstrainedSizeForNodeAtIndexPath) {
-    return [collectionView.asyncDataSource collectionView:collectionView constrainedSizeForNodeAtIndexPath:indexPath];
+  if (_delegateFlags.implementsConstrainedSizeForNodeAtIndexPath) {
+    return [collectionView.asyncDelegate collectionView:collectionView constrainedSizeForNodeAtIndexPath:indexPath];
+  } else {
+    // With 2.0 `collectionView:constrainedSizeForNodeAtIndexPath:` was moved to the delegate. Assert if not implemented on the delegate but on the data source
+    ASDisplayNodeAssert([collectionView.asyncDataSource respondsToSelector:@selector(collectionView:constrainedSizeForNodeAtIndexPath:)] == NO, @"collectionView:constrainedSizeForNodeAtIndexPath: was moved from the ASCollectionDataSource to the ASCollectionDataSource.");
   }
   
   return NodeConstrainedSizeForScrollDirection(collectionView);
@@ -72,12 +75,6 @@ static inline ASSizeRange NodeConstrainedSizeForScrollDirection(ASCollectionView
 {
   ASDisplayNodeAssert(NO, @"To support supplementary nodes in ASCollectionView, it must have a layoutInspector for layout inspection. (See ASCollectionViewFlowLayoutInspector for an example.)");
   return ASSizeRangeMake(CGSizeZero, CGSizeZero);
-}
-
-- (NSUInteger)collectionView:(ASCollectionView *)collectionView numberOfSectionsForSupplementaryNodeOfKind:(NSString *)kind
-{
-  ASDisplayNodeAssert(NO, @"To support supplementary nodes in ASCollectionView, it must have a layoutInspector for layout inspection. (See ASCollectionViewFlowLayoutInspector for an example.)");
-  return 0;
 }
 
 - (NSUInteger)collectionView:(ASCollectionView *)collectionView supplementaryNodesOfKind:(NSString *)kind inSection:(NSUInteger)section
@@ -99,10 +96,10 @@ static inline ASSizeRange NodeConstrainedSizeForScrollDirection(ASCollectionView
   struct {
     unsigned int implementsReferenceSizeForHeader:1;
     unsigned int implementsReferenceSizeForFooter:1;
+    unsigned int implementsConstrainedSizeForNodeAtIndexPath:1;
   } _delegateFlags;
   
   struct {
-    unsigned int implementsConstrainedSizeForNodeAtIndexPath:1;
     unsigned int implementsNumberOfSectionsInCollectionView:1;
   } _dataSourceFlags;
 }
@@ -132,6 +129,7 @@ static inline ASSizeRange NodeConstrainedSizeForScrollDirection(ASCollectionView
   } else {
     _delegateFlags.implementsReferenceSizeForHeader = [delegate respondsToSelector:@selector(collectionView:layout:referenceSizeForHeaderInSection:)];
     _delegateFlags.implementsReferenceSizeForFooter = [delegate respondsToSelector:@selector(collectionView:layout:referenceSizeForFooterInSection:)];
+    _delegateFlags.implementsConstrainedSizeForNodeAtIndexPath = [delegate respondsToSelector:@selector(collectionView:constrainedSizeForNodeAtIndexPath:)];
   }
 }
 
@@ -140,15 +138,17 @@ static inline ASSizeRange NodeConstrainedSizeForScrollDirection(ASCollectionView
   if (dataSource == nil) {
     memset(&_dataSourceFlags, 0, sizeof(_dataSourceFlags));
   } else {
-    _dataSourceFlags.implementsConstrainedSizeForNodeAtIndexPath = [dataSource respondsToSelector:@selector(collectionView:constrainedSizeForNodeAtIndexPath:)];
     _dataSourceFlags.implementsNumberOfSectionsInCollectionView = [dataSource respondsToSelector:@selector(numberOfSectionsInCollectionView:)];
   }
 }
 
 - (ASSizeRange)collectionView:(ASCollectionView *)collectionView constrainedSizeForNodeAtIndexPath:(NSIndexPath *)indexPath
 {
-  if (_dataSourceFlags.implementsConstrainedSizeForNodeAtIndexPath) {
-    return [collectionView.asyncDataSource collectionView:collectionView constrainedSizeForNodeAtIndexPath:indexPath];
+  if (_delegateFlags.implementsConstrainedSizeForNodeAtIndexPath) {
+    return [collectionView.asyncDelegate collectionView:collectionView constrainedSizeForNodeAtIndexPath:indexPath];
+  } else {
+    // With 2.0 `collectionView:constrainedSizeForNodeAtIndexPath:` was moved to the delegate. Assert if not implemented on the delegate but on the data source
+    ASDisplayNodeAssert([collectionView.asyncDataSource respondsToSelector:@selector(collectionView:constrainedSizeForNodeAtIndexPath:)] == NO, @"collectionView:constrainedSizeForNodeAtIndexPath: was moved from the ASCollectionDataSource to the ASCollectionDataSource.");
   }
   
   CGSize itemSize = _layout.itemSize;
@@ -169,15 +169,6 @@ static inline ASSizeRange NodeConstrainedSizeForScrollDirection(ASCollectionView
     constrainedSize = CGSizeMake(supplementarySize.width, CGRectGetHeight(collectionView.bounds));
   }
   return ASSizeRangeMake(CGSizeZero, constrainedSize);
-}
-
-- (NSUInteger)collectionView:(ASCollectionView *)collectionView numberOfSectionsForSupplementaryNodeOfKind:(NSString *)kind
-{
-  if (_dataSourceFlags.implementsNumberOfSectionsInCollectionView) {
-    return [collectionView.asyncDataSource numberOfSectionsInCollectionView:collectionView];
-  } else {
-    return 1;
-  }
 }
 
 - (NSUInteger)collectionView:(ASCollectionView *)collectionView supplementaryNodesOfKind:(NSString *)kind inSection:(NSUInteger)section

@@ -47,28 +47,13 @@
 
 @implementation ASDisplayNodeImplicitHierarchyTests
 
-- (void)setUp {
-  [super setUp];
-  [ASDisplayNode setUsesImplicitHierarchyManagement:YES];
-}
-
-- (void)tearDown {
-  [ASDisplayNode setUsesImplicitHierarchyManagement:NO];
-  [super tearDown];
-}
-
 - (void)testFeatureFlag
 {
-  XCTAssert([ASDisplayNode usesImplicitHierarchyManagement]);
   ASDisplayNode *node = [[ASDisplayNode alloc] init];
-  XCTAssert(node.usesImplicitHierarchyManagement);
-
-  [ASDisplayNode setUsesImplicitHierarchyManagement:NO];
-  XCTAssertFalse([ASDisplayNode usesImplicitHierarchyManagement]);
-  XCTAssertFalse(node.usesImplicitHierarchyManagement);
-
-  node.usesImplicitHierarchyManagement = YES;
-  XCTAssert(node.usesImplicitHierarchyManagement);
+  XCTAssertFalse(node.automaticallyManagesSubnodes);
+  
+  node.automaticallyManagesSubnodes = YES;
+  XCTAssertTrue(node.automaticallyManagesSubnodes);
 }
 
 - (void)testInitialNodeInsertionWithOrdering
@@ -80,6 +65,7 @@
   ASDisplayNode *node5 = [[ASDisplayNode alloc] init];
 
   ASSpecTestDisplayNode *node = [[ASSpecTestDisplayNode alloc] init];
+  node.automaticallyManagesSubnodes = YES;
   node.layoutSpecBlock = ^(ASDisplayNode *weakNode, ASSizeRange constrainedSize) {
     ASStaticLayoutSpec *staticLayout = [ASStaticLayoutSpec staticLayoutSpecWithChildren:@[node4]];
     
@@ -106,6 +92,7 @@
   ASDisplayNode *node3 = [[ASDisplayNode alloc] init];
   
   ASSpecTestDisplayNode *node = [[ASSpecTestDisplayNode alloc] init];
+  node.automaticallyManagesSubnodes = YES;
   node.layoutSpecBlock = ^(ASDisplayNode *weakNode, ASSizeRange constrainedSize){
     ASSpecTestDisplayNode *strongNode = (ASSpecTestDisplayNode *)weakNode;
     if ([strongNode.layoutState isEqualToNumber:@1]) {
@@ -130,12 +117,30 @@
   XCTAssertEqual(node.subnodes[2], node2);
 }
 
+- (void)testLayoutTransitionMeasurementCompletionBlockIsCalledOnMainThread
+{
+  ASDisplayNode *displayNode = [ASDisplayNode new];
+  
+  // Trigger explicit view creation to be able to use the Transition API
+  [displayNode view];
+  
+  XCTestExpectation *expectation = [self expectationWithDescription:@"Call measurement completion block on main"];
+  
+  [displayNode transitionLayoutWithSizeRange:ASSizeRangeMake(CGSizeZero, CGSizeZero) animated:YES shouldMeasureAsync:YES measurementCompletion:^{
+    XCTAssertTrue(ASDisplayNodeThreadIsMain(), @"Measurement completion block should be called on main thread");
+    [expectation fulfill];
+  }];
+  
+  [self waitForExpectationsWithTimeout:2.0 handler:nil];
+}
+
 - (void)testMeasurementInBackgroundThreadWithLoadedNode
 {
   ASDisplayNode *node1 = [[ASDisplayNode alloc] init];
   ASDisplayNode *node2 = [[ASDisplayNode alloc] init];
   
   ASSpecTestDisplayNode *node = [[ASSpecTestDisplayNode alloc] init];
+  node.automaticallyManagesSubnodes = YES;
   node.layoutSpecBlock = ^(ASDisplayNode *weakNode, ASSizeRange constrainedSize) {
     ASSpecTestDisplayNode *strongNode = (ASSpecTestDisplayNode *)weakNode;
     if ([strongNode.layoutState isEqualToNumber:@1]) {
@@ -179,6 +184,7 @@
   ASDisplayNode *node2 = [[ASDisplayNode alloc] init];
   
   ASSpecTestDisplayNode *node = [[ASSpecTestDisplayNode alloc] init];
+  node.automaticallyManagesSubnodes = YES;
   
   node.layoutSpecBlock = ^(ASDisplayNode *weakNode, ASSizeRange constrainedSize) {
     ASSpecTestDisplayNode *strongNode = (ASSpecTestDisplayNode *)weakNode;
@@ -190,6 +196,8 @@
   };
  
   // Intentionally trigger view creation
+  [node view];
+  [node1 view];
   [node2 view];
   
   XCTestExpectation *expectation = [self expectationWithDescription:@"Fix IHM layout transition also if one node is already loaded"];
